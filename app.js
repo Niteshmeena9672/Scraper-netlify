@@ -9,21 +9,7 @@ const PORT = 3000;
 /**
  * Function to fetch a webpage with retries
  */
-const fetchWithRetry = async (url, headers, retries = 3, delay = 2000) => {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const response = await axios.get(url, { headers });
-      if (response.status === 200) {
-        return response.data;
-      }
-    } catch (error) {
-      if (attempt === retries) {
-        throw new Error(`Failed after ${retries} attempts: ${error.message}`);
-      }
-      await new Promise((res) => setTimeout(res, delay));
-    }
-  }
-};
+
 // List of user-agents to rotate
 const headersList = [
   {
@@ -51,19 +37,34 @@ const headersList = [
       'Upgrade-Insecure-Requests': '1',
   },
 ];
+const fetchWithRetry = async (url, headersList, retries = 3, delay = 2000) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    for (const headers of headersList) {
+      try {
+        console.log(`Attempt ${attempt}, using headers:`, headers["User-Agent"]);
+        const response = await axios.get(url, { headers });
+
+        if (response.status === 200) {
+          return response.data;
+        }
+      } catch (error) {
+        console.warn(`Attempt ${attempt} with headers ${headers["User-Agent"]} failed: ${error.message}`);
+        if (attempt === retries) {
+          throw new Error(`Failed after ${retries} attempts with different headers`);
+        }
+        await new Promise((res) => setTimeout(res, delay));
+      }
+    }
+  }
+};
+
+
 
 
 const extractAmazonData = async (productLink) => {
   try {
-    const headers = {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.5",
-    };
-
-    // Fetch the product page HTML with retries
-    const productHtml = await fetchWithRetry(productLink, headers);
+    // Fetch the product page HTML with retries and rotating headers
+    const productHtml = await fetchWithRetry(productLink, headersList);
     const $ = cheerio.load(productHtml);
 
     const platform = "Amazon";
@@ -79,7 +80,7 @@ const extractAmazonData = async (productLink) => {
 
     const asin = asinMatch[1];
 
-    // Fetch Bank Offers
+    // Fetch Bank Offers with rotating headers
     let offers = [];
     try {
       const baseRedirectedUrl = "https://www.amazon.in/gp/product/ajax";
@@ -97,7 +98,7 @@ const extractAmazonData = async (productLink) => {
       });
 
       const redirectedLink = `${baseRedirectedUrl}?${params.toString()}`;
-      const bankHtml = await fetchWithRetry(redirectedLink, headers);
+      const bankHtml = await fetchWithRetry(redirectedLink, headersList);
       const bank$ = cheerio.load(bankHtml);
       const paragraphs = bank$("p.a-spacing-mini.a-size-base-plus, p.a-size-medium-plus.a-spacing-medium.a-spacing-top-small");
 
