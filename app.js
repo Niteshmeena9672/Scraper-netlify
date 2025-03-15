@@ -539,51 +539,53 @@ const extractAmazonData = async (productLink) => {
 
 
 
-app.get("/scrape", async (req, res) => {
-    const { url } = req.query;
-  
+  exports.handler = async (event) => {
+    const url = event.queryStringParameters?.url;
+    
     if (!url) {
-      return res.status(400).json({ error: "Missing 'url' query parameter" });
-    }
-  
-    try {
-      let productData;
-      if (url.includes("ajio")) {
-        productData = await extractAjioData(url);
-      } else if (url.includes("nykaa")) {
-        productData = await extractNykaaData(url);
-      } else if (url.includes("vijaysales")) {
-        productData = await extractVijaySalesData(url);
-      } else if (url.includes("amazon")) {
-        productData = await extractAmazonData(url);
-      } else if (url.includes("croma")) {
-        productData = await fetchCromaProductData(url);
-      } else if (url.includes("tatacliq")) {
-        productData = await extractTataCliq(url);
-      } else if (url.includes("reliancedigital")) {
-        productData = await fetchProductDataReliancedigital(url);
-      } else if (url.includes("flipkart")) {
-        productData = await fetchAndExtractFlipkartData(url);
-      } else {
-        // Default logic for unknown websites
-        const html = await fetchWithRetry(url, {});
-        const $ = cheerio.load(html);
-        productData = {
-          metaDescription: $('meta[name="description"]').attr("content") || "Not available",
-          ogDescription: $('meta[property="og:description"]').attr("content") || "Not available",
-          twitterDescription: $('meta[name="twitter:description"]').attr("content") || "Not available",
+        return {
+            statusCode: 400,
+            body: JSON.stringify({ error: "Missing 'url' query parameter" }),
         };
-      }
-      res.json(productData);
-    } catch (error) {
-      res.status(500).json({ error: `Failed to scrape data: ${error.message}` });
     }
-  });
-  
 
-/**
- * Start the server
- */
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
-});
+    try {
+        let productData;
+        if (url.includes("ajio")) {
+            productData = await extractAjioData(url);
+        } else if (url.includes("nykaa")) {
+            productData = await extractNykaaData(url);
+        } else if (url.includes("vijaysales")) {
+            productData = await extractVijaySalesData(url);
+        } else if (url.includes("amazon")) {
+            productData = await extractAmazonData(url);
+        } else if (url.includes("croma")) {
+            productData = await fetchCromaProductData(url);
+        } else if (url.includes("tatacliq")) {
+            productData = await extractTataCliq(url);
+        } else if (url.includes("reliancedigital")) {
+            productData = await fetchProductDataReliancedigital(url);
+        } else if (url.includes("flipkart")) {
+            productData = await fetchAndExtractFlipkartData(url);
+        } else {
+            // Default logic for unknown websites
+            const html = await fetchWithRetry(url, {});
+            const $ = cheerio.load(html);
+            productData = {
+                metaDescription: $('meta[name="description"]').attr("content") || "Not available",
+                ogDescription: $('meta[property="og:description"]').attr("content") || "Not available",
+                twitterDescription: $('meta[name="twitter:description"]').attr("content") || "Not available",
+            };
+        }
+        
+        return {
+            statusCode: 200,
+            body: JSON.stringify(productData),
+        };
+    } catch (error) {
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: `Failed to scrape data: ${error.message}` }),
+        };
+    }
+};
