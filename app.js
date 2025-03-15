@@ -37,7 +37,7 @@ const headersList = [
       'Upgrade-Insecure-Requests': '1',
   },
 ];
-const fetchWithRetry = async (url, headersList, retries = 3, delay = 2000) => {
+const fetchWithRetry = async (url, headersList, retries = 2, delay = 200) => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     for (const headers of headersList) {
       try {
