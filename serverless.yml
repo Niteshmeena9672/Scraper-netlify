@@ -1,0 +1,32 @@
+service: product-scrapping  # The name of your service
+
+provider:
+  name: aws
+  runtime: nodejs18.x  # Change this depending on your runtime version
+  region: ap-south-1  # Change this to your preferred region
+  environment:
+      NODE_ENV: production
+      SCRAPER_API_KEY: ${env:SCRAPER_API_KEY}  # Reference the SCRAPER_API_KEY from .env
+      OPENAI_API_KEY: ${env:OPENAI_API_KEY} 
+      OpenAI_KEY: ${env:OpenAI_KEY} 
+functions:
+  scraperFunction:
+    handler: app.handler
+    timeout: 60  # Increase the timeout (default is 6s, max for AWS is 900s)
+    events:
+      - http:
+          path: scraper  # Define a route for the function
+          method: get     # Set the HTTP method
+
+plugins:
+  - serverless-dotenv-plugin  # This plugin will load variables from the .env file
+  - serverless-offline
+
+custom:
+  serverless-offline:
+    port: 3001 # Custom port
+# Exclude the file from being pushed to AWS
+package:
+  exclude:
+    - tester_vijaysales_bank_offer.js  # Add the file you want to exclude
+    - tester.js
