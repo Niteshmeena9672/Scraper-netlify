@@ -2,18 +2,17 @@ const express = require("express");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const axios = require("axios");
+const { Builder, By, until } = require("selenium-webdriver");
+const chrome = require("selenium-webdriver/chrome");
 require("dotenv").config();
 
-// Install the required packages:
-// npm install puppeteer-extra puppeteer-extra-plugin-stealth puppeteer
-
-// Use the stealth plugin to avoid detection
 puppeteer.use(StealthPlugin());
 
 const app = express();
 const PORT = 3000;
 
 // Function to extract Amazon data using Puppeteer
+
 const extractAmazonData = async (productLink) => {
     let browser;
     try {
@@ -26,237 +25,213 @@ const extractAmazonData = async (productLink) => {
         const page = await browser.newPage();
 
         // Set a random user-agent
-        const userAgent =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
-        await page.setUserAgent(userAgent);
+        await page.setUserAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        );
 
-        console.log(`🔍 Fetching product data from: ${productLink}`);
-        await page.goto(productLink, { waitUntil: "networkidle2", timeout: 60000 });
+        // console.log(`🔍 Fetching product data from: ${productLink}`);
+        await page.goto(productLink, { waitUntil: "domcontentloaded", timeout: 30000 });
 
         // ✅ Extract product details
         const productData = await page.evaluate(() => {
-            const title = document.querySelector("#productTitle")?.innerText?.trim() || "Not available";
+            const productName = document.querySelector("#productTitle")?.innerText?.trim() || "Not available";
             const price = document.querySelector(".a-price .a-offscreen")?.innerText?.trim() || "Not available";
-            const asinMatch = window.location.href.match(/\/dp\/(B[A-Z0-9]{9})/);
-            const asin = asinMatch ? asinMatch[1] : null;
-            return { platform: "Amazon", title, price, asin };
+            return { platform: "Amazon", productName, price };
         });
 
-        // ✅ Extract parameters dynamically from `data-side-sheet`
-        const extractedParams = await page.evaluate(() => {
-            const sideSheetElement = document.querySelector("[data-action='side-sheet']");
-            if (!sideSheetElement) return {};
+        // ✅ Programmatically click on #itembox-InstantBankDiscount
+        let bankOffers = [];
+        const instantBankDiscountElement = await page.$("#itembox-InstantBankDiscount");
 
-            const sideSheetData = sideSheetElement.getAttribute("data-side-sheet");
-            if (!sideSheetData) return {};
+        if (instantBankDiscountElement) {
+            await instantBankDiscountElement.click();
 
+            // Wait for the bank offer section to appear (shorter timeout)
             try {
-                const parsedData = JSON.parse(sideSheetData.replace(/&quot;/g, '"'));
-                return {
-                    smid: parsedData.smid || "",
-                    buyingOptionIndex: parsedData.buyingOptionIndex || "0",
-                    encryptedMerchantId: parsedData.encryptedMerchantId || "",
-                    sr: parsedData.sr || "",
-                };
-            } catch (error) {
-                console.warn("⚠️ Failed to parse data-side-sheet JSON:", error);
-                return {};
-            }
-        });
+                await page.waitForSelector("#InstantBankDiscount p", { timeout: 3000 });
+            } catch (error) {}
 
-        console.log("✅ Extracted Parameters:", extractedParams);
-
-        // ✅ Function to fetch bank offers using `axios`
-        const fetchBankOffers = async (featureParams) => {
-            try {
-                const offerType = featureParams.includes("GCCashback") ? "GCCashback" : "InstantBankDiscount";
-                const baseRedirectedUrl = "https://www.amazon.in/gp/product/ajax";
-                const params = new URLSearchParams({
-                    asin: productData.asin,
-                    deviceType: "web",
-                    offerType, // Dynamically set offerType based on featureParams
-                    buyingOptionIndex: extractedParams.buyingOptionIndex || "0",
-                    additionalParams: `merchantId:${extractedParams.encryptedMerchantId}`,
-                    smid: extractedParams.smid || "",
-                    encryptedMerchantId: extractedParams.encryptedMerchantId || "",
-                    sr: extractedParams.sr || "",
-                    experienceId: "vsxOffersSecondaryView",
-                    showFeatures: "vsxoffers",
-                    featureParams, // This changes on retry
-                });
-
-                const redirectedLink = `${baseRedirectedUrl}?${params.toString()}`;
-                console.log(`🔍 Fetching bank offers from: ${redirectedLink}`);
-
-                // Perform an HTTP GET request using axios
-                const response = await axios.get(redirectedLink, {
-                    headers: {
-                        "User-Agent": userAgent,
-                        Accept: "text/html",
-                    },
-                });
-
-                if (response.status !== 200) {
-                    throw new Error("Failed to fetch bank offers");
-                }
-
-                // Extract bank offers from response data (HTML parsing)
-                const html = response.data;
-                const offers = [];
-                const regex = /<p[^>]*>(.*?)<\/p>/g;
-                let match;
-                while ((match = regex.exec(html)) !== null) {
-                    offers.push(match[1].trim());
-                }
-
-                // return { offers, bankOffersHtml: html };
-                 return { offers };
-
-            } catch (error) {
-                console.warn("⚠️ Failed to fetch bank offers:", error.message);
-                return { offers: [], bankOffersHtml: "<div>Error fetching bank offers</div>" };
-            }
-        };
-
-        // ✅ First attempt with `InstantBankDiscount`
-        let { offers, bankOffersHtml } = await fetchBankOffers("OfferType:InstantBankDiscount,DeviceType:web");
-
-        // 🔄 Retry with `GCCashback` if no offers were found
-        if (offers.length === 0 || offers.includes("No bank offers available")) {
-            console.log("🔄 Retrying with GCCashback...");
-            ({ offers, bankOffersHtml } = await fetchBankOffers("OfferType:GCCashback,DeviceType:web"));
+            // ✅ Extract all bank offers dynamically
+            bankOffers = await page.evaluate(() => {
+                return Array.from(document.querySelectorAll("#InstantBankDiscount p"))
+                    .map(el => el.innerText.trim())
+                    .filter(text => text);
+            });
         }
 
-        // ✅ Extract Brand Name (first word of the title)
-        const brandName = productData.title.split(" ")[0];
-        const productName = productData.title.replace(brandName, "").trim();
-
-        return {
-            ...productData,
-            brandName,
-            productName,
-            offers,
-            bankOffersHtml,
-            extractedParams, // ✅ Added dynamically extracted parameters
-        };
+        return { ...productData, bankOffers };
     } catch (error) {
         console.error(`❌ Error in extractAmazonData: ${error.message}`);
         return { error: `An error occurred while fetching product data: ${error.message}` };
     } finally {
-        if (browser) await browser.close();
+        if (browser) {
+            await browser.close();
+        }
     }
 };
 
+
+
+
 const fetchAndExtractFlipkartData = async (productUrl) => {
-    let browser;
+  let browser;
+  try {
+    const puppeteer = require("puppeteer");
+    browser = await puppeteer.launch({
+      headless: true, // Run in non-headless mode (visible browser)
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--start-maximized"], // Add --start-maximized
+    });
+
+    const page = await browser.newPage();
+
+    // Set a larger viewport
+    await page.setViewport({ width: 1920, height: 1080 });
+
+    console.log(`Fetching product data from: ${productUrl}`);
+    await page.goto(productUrl, { waitUntil: "networkidle2", timeout: 60000 });
+
+    // ✅ Extract product details
+    const productData = await page.evaluate(() => {
+      const title =
+        document.querySelector("h1._6EBuvT span.VU-ZEz")?.innerText?.trim() ||
+        "Not available";
+      const price =
+        document.querySelector("div.Nx9bqj.CxhGGd")?.innerText?.trim() ||
+        "Not available";
+      return { platform: "Flipkart", title, price };
+    });
+
+    // ✅ Extract Brand Name
+    const titleParts = productData.title.split(" ");
+    const brandName = titleParts[0] || "Unknown";
+    const productName = productData.title.replace(brandName, "").trim();
+
+    // ✅ Extract Offers (Bank Offers & Discounts) - Handle button presence/absence
+    let offers = [];
     try {
-      const puppeteer = require("puppeteer");
-      browser = await puppeteer.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      });
-  
-      const page = await browser.newPage();
-  
-    //   await page.setUserAgent(
-    //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
-    //   );
-    //   await page.setExtraHTTPHeaders({
-    //     "Accept-Language": "en-US,en;q=0.9",
-    //   });
-  
-      console.log(`Fetching product data from: ${productUrl}`);
-      await page.goto(productUrl, { waitUntil: "networkidle2", timeout: 60000 });
-  
-      // Extract product details
-      const productData = await page.evaluate(() => {
-        const title = document.querySelector("h1._6EBuvT span.VU-ZEz")?.innerText?.trim() || "Not available";
-        const price = document.querySelector("div.Nx9bqj.CxhGGd")?.innerText?.trim() || "Not available";
-        return { platform: "Flipkart", title, price };
-      });
-  
-      // Extract Brand Name
-      const titleParts = productData.title.split(" ");
-      const brandName = titleParts[0] || "Unknown";
-      const productName = productData.title.replace(brandName, "").trim();
-  
-      // **Extract Offers (Bank Offers & Discounts)**
-      let offers = [];
-      try {
-        await page.waitForSelector("li.kF1Ml8.col", { timeout: 10000 });
-  
-        offers = await page.evaluate(() => {
-          let extractedOffers = [];
-          document.querySelectorAll("li.kF1Ml8.col").forEach((el) => {
-            const offerTitle = el.querySelector("span.ynXjOy")?.innerText?.trim(); // "Bank Offer"
-            const offerDescription = el.querySelector("span:not(.ynXjOy)")?.innerText?.trim(); // "5% Unlimited Cashback..."
-            if (offerTitle && offerDescription) {
-              extractedOffers.push(`${offerTitle}: ${offerDescription}`);
-            }
-          });
-          return extractedOffers.length > 0 ? extractedOffers : ["No offers available"];
+      // Check if the "View More Offers" button exists
+      const buttonSelector =
+        "#container > div > div._39kFie.N3De93.JxFEK3._48O0EI > div.DOjaWF.YJG4Cf > div.DOjaWF.gdgoEp.col-8-12 > div:nth-child(3) > div.f\\+WmCe > div > button";
+      const buttonExists = await page.$(buttonSelector);
+
+      if (buttonExists) {
+        // Button exists, so click it
+        await page.evaluate((selector) => {
+          const button = document.querySelector(selector);
+          if (button) {
+            button.click();
+          } else {
+            console.error("Button not found with selector:", selector); //This should not happen now
+          }
+        }, buttonSelector);
+
+        // Wait for offers to potentially load after the click
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      } else {
+        console.log("View More Offers button does not exist on this page.");
+      }
+
+      // Extract offers (whether the button was clicked or not)
+      offers = await page.evaluate(() => {
+        let extractedOffers = [];
+        document.querySelectorAll("li.kF1Ml8.col").forEach((el) => {
+          const offerTitle = el.querySelector("span.ynXjOy")?.innerText?.trim();
+          const offerDescription = el
+            .querySelector("span:not(.ynXjOy)")
+            ?.innerText?.trim();
+          if (offerTitle && offerDescription) {
+            extractedOffers.push(`${offerTitle}: ${offerDescription}`);
+          }
         });
-      } catch (error) {
-        console.warn("⚠️ Failed to fetch bank offers:", error.message);
-      }
-  
-      // **Extract Complete HTML for Debugging**
-      const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
-  
-      return {
-        ...productData,
-        brandName,
-        productName,
-        offers,
-        
-      };
+        return extractedOffers.length > 0
+          ? extractedOffers
+          : ["No offers available"];
+      });
     } catch (error) {
-      console.error(`❌ Error in fetchAndExtractFlipkartData: ${error.message}`);
-      return { error: `An error occurred while fetching product data: ${error.message}` };
-    } finally {
-      if (browser) {
-        await browser.close();
-      }
+      console.warn("⚠️ Failed to fetch bank offers:", error.message);
+      offers = ["No offers available"]; // Default value on error
     }
-  };
-  
+
+    // ✅ Extract **Complete HTML Content**
+    const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
+
+    return {
+      ...productData,
+      brandName,
+      productName,
+      offers,
+      // htmlContent,
+    };
+  } catch (error) {
+    console.error(`❌ Error in fetchAndExtractFlipkartData: ${error.message}`);
+    return {
+      error: `An error occurred while fetching product data: ${error.message}`,
+    };
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
+};
+
 
 async function fetchMyntra(url) {
-    if (!url.includes("myntra.com")) {
-        return { Error: "Given link does not belong to Myntra" };
-    }
+  let driver;
+  try {
+      if (!url.includes("myntra.com")) {
+          return { Error: "Given link does not belong to Myntra" };
+      }
 
-    let browser;
-    try {
-        browser = await puppeteer.launch({ headless: "new" });
-        const page = await browser.newPage();
-        await page.goto(url, { waitUntil: "networkidle2" });
+      // Set up Chrome options
+      const chromeOptions = new chrome.Options()
+          .addArguments("--disable-gpu", "--no-sandbox", "--remote-debugging-port=9222")
+          .addArguments(`--user-data-dir=/tmp/chrome-profile-${Date.now()}`) // Unique user data dir
 
-        // Extract product details
-        const brand = await page.$eval(".pdp-title", el => el.innerText);
-        const product = await page.$eval(".pdp-name", el => el.innerText);
-        const price = await page.$eval(".pdp-price", el => el.innerText);
+      // Initialize the WebDriver
+      driver = await new Builder()
+          .forBrowser("chrome")
+          .setChromeOptions(chromeOptions)
+          .build();
 
-        // Extract offers
-        const offerElements = await page.$$(".pdp-offers-offerLikeBestPrice");
-        const offers = await Promise.all(
-            offerElements.map(async (offer) => {
-                return await offer.evaluate(el => el.innerText);
-            })
-        );
+      // Load the webpage
+      await driver.get(url);
 
-        return {
-            Platform: "Myntra",
-            Product: product,
-            Brand: brand,
-            Price: price,
-            Offers: offers.length ? offers : ["No offers available"]
-        };
-    } catch (error) {
-        return { Error: `An unexpected error occurred: ${error.message}` };
-    } finally {
-        if (browser) await browser.close();
-    }
+      // Extract product details
+      let brand = await driver.findElement(By.className("pdp-title")).getText();
+      let product = await driver.findElement(By.className("pdp-name")).getText();
+      let price = await driver.findElement(By.className("pdp-price")).getText();
+
+      // Extract offers
+      let offers = [];
+      try {
+          let offerElements = await driver.findElements(By.className("pdp-offers-offerLikeBestPrice"));
+          for (let offerElement of offerElements) {
+              let fullText = await offerElement.getText();
+              try {
+                  let termsElement = await offerElement.findElement(By.className("pdp-offers-linkButton"));
+                  let termsText = await termsElement.getText();
+                  fullText = fullText.replace(termsText, "").trim();
+              } catch (error) {
+                  // No action needed if 'Terms & Condition' is not found
+              }
+              offers.push(fullText);
+          }
+      } catch (error) {
+          offers = ["No offers available"];
+      }
+
+      return {
+          Platform: "Myntra",
+          Product: product,
+          Brand: brand,
+          Price: price,
+          Offers: offers,
+      };
+  } catch (error) {
+      return { Error: `An unexpected error occurred: ${error.message}` };
+  } finally {
+      if (driver) await driver.quit();
+  }
 }
 /**
  * Express route to scrape product details
@@ -276,6 +251,9 @@ app.get("/scrape", async (req, res) => {
     else if (url.includes("flipkart")){
         productData = await fetchAndExtractFlipkartData(url);
     }
+    else if (url.includes("myntra")){
+      productData = await fetchMyntra(url);
+  }
      else {
       // Default logic for unknown websites
       productData = {
